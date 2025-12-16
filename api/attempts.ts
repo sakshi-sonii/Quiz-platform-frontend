@@ -1,38 +1,29 @@
-import mongoose from "mongoose";
-import { connectDB } from "./_db.js";
-import { auth } from "./auth.js";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import clientPromise from "./_db.js";
+import jwt from "jsonwebtoken";
 
-const AttemptSchema = new mongoose.Schema({
-  testId: String,
-  studentId: String,
-  answers: [Number],
-  score: Number,
-  submittedAt: String
-});
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const client = await clientPromise;
+  const db = client.db();
 
-const Attempt =
-  mongoose.models.Attempt || mongoose.model("Attempt", AttemptSchema);
+  const token = req.headers.authorization?.split(" ")[1];
+  const decoded: any = jwt.verify(token!, process.env.JWT_SECRET!);
 
-export default async function handler(req: any, res: any) {
-  await connectDB();
-  const user = auth(req);
-
-  // Submit test
   if (req.method === "POST") {
-    if (user.role !== "student") return res.status(403).end();
-
-    const attempt = await Attempt.create({
+    const attempt = {
       ...req.body,
-      studentId: user.id,
-      submittedAt: new Date().toISOString()
-    });
-
-    return res.status(201).json(attempt);
+      studentId: decoded.id,
+      submittedAt: new Date(),
+    };
+    await db.collection("attempts").insertOne(attempt);
+    return res.json(attempt);
   }
 
-  // Student results
   if (req.method === "GET") {
-    const attempts = await Attempt.find({ studentId: user.id });
+    const attempts = await db
+      .collection("attempts")
+      .find({ studentId: decoded.id })
+      .toArray();
     return res.json(attempts);
   }
 

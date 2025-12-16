@@ -1,46 +1,29 @@
-import mongoose from "mongoose";
-import bcrypt from "bcryptjs";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import clientPromise from "./_db.js";
 import jwt from "jsonwebtoken";
-import { connectDB } from "./_db.js";
 
-const UserSchema = new mongoose.Schema({
-  name: String,
-  email: { type: String, unique: true },
-  password: String,
-  role: { type: String, enum: ["admin", "teacher", "student"] }
-});
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const client = await clientPromise;
+  const db = client.db();
 
-const User = mongoose.models.User || mongoose.model("User", UserSchema);
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).end();
 
-const JWT_SECRET = process.env.JWT_SECRET as string;
+  const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
+  if (decoded.role !== "admin") return res.status(403).end();
 
-export default async function handler(req: any, res: any) {
-  await connectDB();
-
-  // REGISTER
-  if (req.method === "POST") {
-    const { name, email, password, role } = req.body;
-    const hash = await bcrypt.hash(password, 10);
-    const user = await User.create({ name, email, password: hash, role });
-    return res.status(201).json(user);
+  if (req.method === "GET") {
+    const users = await db.collection("users").find().toArray();
+    return res.json(users);
   }
 
-  // LOGIN
   if (req.method === "PUT") {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).end();
-
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(401).end();
-
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: "7d" }
+    const { userId, approved } = req.body;
+    await db.collection("users").updateOne(
+      { _id: userId },
+      { $set: { approved } }
     );
-
-    return res.json({ token, user });
+    return res.json({ success: true });
   }
 
   res.status(405).end();
