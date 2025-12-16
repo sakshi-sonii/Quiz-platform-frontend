@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Test, getUserFromRequest } from "./_db";
+import { connectDB, Material, getUserFromRequest } from "./_db";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,63 +18,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    // GET /api/tests - Get all tests
+    // GET /api/materials - Get materials
     if (req.method === "GET") {
       let query = {};
 
-      // Students can only see approved and active tests for their course
+      // Students can only see materials for their course
       if (currentUser.role === "student") {
-        query = {
-          approved: true,
-          active: true,
-          course: currentUser.course,
-        };
+        query = { course: currentUser.course };
       }
-      // Teachers can see their own tests
+      // Teachers can see their own materials
       else if (currentUser.role === "teacher") {
         query = { teacherId: currentUser._id };
       }
-      // Admin can see all tests
+      // Admin can see all materials
 
-      const tests = await Test.find(query).sort({ createdAt: -1 });
-      return res.status(200).json(tests);
+      const materials = await Material.find(query)
+        .populate("course", "name")
+        .populate("teacherId", "name")
+        .sort({ createdAt: -1 });
+
+      return res.status(200).json(materials);
     }
 
-    // POST /api/tests - Create test (teacher only)
+    // POST /api/materials - Create material (teachers only)
     if (req.method === "POST") {
       if (currentUser.role !== "teacher") {
-        return res.status(403).json({ message: "Only teachers can create tests" });
+        return res.status(403).json({ message: "Only teachers can create materials" });
       }
 
       if (!currentUser.approved) {
         return res.status(403).json({ message: "Your account is not approved yet" });
       }
 
-      const { title, course, subject, duration, questions } = req.body;
+      const { title, course, subject, content, type } = req.body;
 
-      if (!title || !course || !subject || !duration || !questions || questions.length === 0) {
+      if (!title || !course || !subject || !content || !type) {
         return res.status(400).json({ message: "All fields are required" });
       }
 
-      // Validate questions
-      for (const q of questions) {
-        if (!q.question || !q.options || q.options.length < 2 || q.correct === undefined) {
-          return res.status(400).json({ message: "Invalid question format" });
-        }
+      if (!["notes", "video", "pdf"].includes(type)) {
+        return res.status(400).json({ message: "Invalid material type" });
       }
 
-      const test = await Test.create({
+      const material = await Material.create({
         title,
         course,
         subject,
-        duration,
-        questions,
+        content,
+        type,
         teacherId: currentUser._id,
-        approved: false,
-        active: false,
       });
 
-      return res.status(201).json(test);
+      return res.status(201).json(material);
     }
 
     return res.status(405).json({ message: "Method not allowed" });
