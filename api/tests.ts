@@ -1,4 +1,4 @@
-import { connectDB } from "./_db";
+import { connectDB } from "../api/_db";
 import mongoose from "mongoose";
 
 const QuestionSchema = new mongoose.Schema({
