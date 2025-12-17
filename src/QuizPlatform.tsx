@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BookOpen, Users, FileText, Clock, Award, LogOut } from 'lucide-react';
+import { BookOpen, Users, FileText, Clock, Award, LogOut, Upload, Image as ImageIcon, CheckCircle, Circle, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -44,8 +44,11 @@ interface User {
 
 interface Question {
   question: string;
+  questionImage?: string;
   options: string[];
+  optionImages?: string[];
   correct: number;
+  explanation?: string;
 }
 
 interface Test {
@@ -86,6 +89,7 @@ interface Attempt {
   total: number;
   answers: Record<number, number>;
   submittedAt: string;
+  shuffledOrder?: number[];
 }
 
 const QuizPlatform: React.FC = () => {
@@ -98,15 +102,16 @@ const QuizPlatform: React.FC = () => {
   const [view, setView] = useState<string>('login');
   const [currentTest, setCurrentTest] = useState<Test | null>(null);
   const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [markedForReview, setMarkedForReview] = useState<Set<number>>(new Set());
+  const [shuffledOrder, setShuffledOrder] = useState<number[]>([]);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [loading, setLoading] = useState(false);
 
-  // Fetch courses on mount (needed for registration)
   useEffect(() => {
     api("courses").then(setCourses).catch(console.error);
   }, []);
 
-  // Check if user is already logged in
   useEffect(() => {
     const token = localStorage.getItem("token");
     if (!token) return;
@@ -126,7 +131,6 @@ const QuizPlatform: React.FC = () => {
       .finally(() => setLoading(false));
   }, []);
 
-  // Fetch data when user is logged in
   const fetchData = useCallback(async () => {
     if (!user) return;
 
@@ -141,7 +145,6 @@ const QuizPlatform: React.FC = () => {
       setAttempts(attemptsData);
       setMaterials(materialsData);
 
-      // Only admins can fetch all users
       if (user.role === 'admin') {
         const usersData = await api("users");
         setUsers(usersData);
@@ -155,13 +158,13 @@ const QuizPlatform: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  // Timer for test
   const submitTest = useCallback(async () => {
     if (!currentTest || !user) return;
 
     let score = 0;
-    currentTest.questions.forEach((q, idx) => {
-      if (answers[idx] === q.correct) score++;
+    shuffledOrder.forEach((originalIdx, shuffledIdx) => {
+      const q = currentTest.questions[originalIdx];
+      if (answers[shuffledIdx] === q.correct) score++;
     });
 
     try {
@@ -170,21 +173,24 @@ const QuizPlatform: React.FC = () => {
         score,
         total: currentTest.questions.length,
         answers,
+        shuffledOrder,
       });
 
       alert(`Test submitted! Score: ${score}/${currentTest.questions.length}`);
       
       setCurrentTest(null);
       setAnswers({});
+      setMarkedForReview(new Set());
+      setShuffledOrder([]);
+      setCurrentQuestionIndex(0);
       setView("student");
       
-      // Refresh attempts
       const attemptsData = await api("attempts");
       setAttempts(attemptsData);
     } catch (error: any) {
       alert(error.message || "Failed to submit test");
     }
-  }, [currentTest, user, answers]);
+  }, [currentTest, user, answers, shuffledOrder]);
 
   useEffect(() => {
     if (currentTest && timeLeft > 0) {
@@ -251,6 +257,9 @@ const QuizPlatform: React.FC = () => {
     setView('login');
     setCurrentTest(null);
     setAnswers({});
+    setMarkedForReview(new Set());
+    setShuffledOrder([]);
+    setCurrentQuestionIndex(0);
   };
 
   const addCourse = async (name: string, description: string) => {
@@ -304,13 +313,21 @@ const QuizPlatform: React.FC = () => {
   };
 
   const startTest = (test: Test) => {
+    const order = test.questions.map((_, idx) => idx);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    
     setCurrentTest(test);
     setAnswers({});
+    setMarkedForReview(new Set());
+    setShuffledOrder(order);
+    setCurrentQuestionIndex(0);
     setTimeLeft(test.duration * 60);
     setView('taking-test');
   };
 
-  // Loading screen
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
@@ -817,8 +834,11 @@ const QuizPlatform: React.FC = () => {
     });
     const [questionForm, setQuestionForm] = useState({ 
       question: '', 
+      questionImage: '',
       options: ['', '', '', ''], 
-      correct: 0 
+      optionImages: ['', '', '', ''],
+      correct: 0,
+      explanation: ''
     });
     const [materialForm, setMaterialForm] = useState({ 
       title: '', 
@@ -828,6 +848,7 @@ const QuizPlatform: React.FC = () => {
       type: 'notes' as 'notes' | 'video' | 'pdf'
     });
     const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [uploadingFile, setUploadingFile] = useState(false);
 
     const myTests = tests.filter(t => t.teacherId === user!.id);
 
@@ -835,9 +856,23 @@ const QuizPlatform: React.FC = () => {
       if (questionForm.question && questionForm.options.every(o => o)) {
         setTestForm(prev => ({
           ...prev,
-          questions: [...prev.questions, questionForm]
+          questions: [...prev.questions, {
+            question: questionForm.question,
+            questionImage: questionForm.questionImage,
+            options: questionForm.options,
+            optionImages: questionForm.optionImages,
+            correct: questionForm.correct,
+            explanation: questionForm.explanation
+          }]
         }));
-        setQuestionForm({ question: '', options: ['', '', '', ''], correct: 0 });
+        setQuestionForm({ 
+          question: '', 
+          questionImage: '',
+          options: ['', '', '', ''], 
+          optionImages: ['', '', '', ''],
+          correct: 0,
+          explanation: ''
+        });
       }
     };
 
@@ -849,10 +884,16 @@ const QuizPlatform: React.FC = () => {
     };
 
     const createTest = async () => {
-      // First add any pending question
       let finalQuestions = [...testForm.questions];
       if (questionForm.question && questionForm.options.every(o => o)) {
-        finalQuestions.push(questionForm);
+        finalQuestions.push({
+          question: questionForm.question,
+          questionImage: questionForm.questionImage,
+          options: questionForm.options,
+          optionImages: questionForm.optionImages,
+          correct: questionForm.correct,
+          explanation: questionForm.explanation
+        });
       }
 
       if (!testForm.title || !testForm.course || !testForm.subject || finalQuestions.length === 0) {
@@ -879,7 +920,14 @@ const QuizPlatform: React.FC = () => {
           duration: 60,
           questions: [],
         });
-        setQuestionForm({ question: '', options: ['', '', '', ''], correct: 0 });
+        setQuestionForm({ 
+          question: '', 
+          questionImage: '',
+          options: ['', '', '', ''], 
+          optionImages: ['', '', '', ''],
+          correct: 0,
+          explanation: ''
+        });
         setActiveTab('tests');
       } catch (error: any) {
         alert(error.message || "Failed to create test");
@@ -896,6 +944,128 @@ const QuizPlatform: React.FC = () => {
         alert(error.message || "Failed to update test");
       }
       setActionLoading(null);
+    };
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+      const isWord = file.name.endsWith('.docx') || file.name.endsWith('.doc');
+
+      if (!isExcel && !isWord) {
+        alert('Please upload an Excel (.xlsx, .xls) or Word (.docx, .doc) file');
+        return;
+      }
+
+      setUploadingFile(true);
+
+      try {
+        let questions: Question[] = [];
+
+        if (isExcel) {
+          const XLSX = await import('xlsx');
+          const data = await file.arrayBuffer();
+          const workbook = XLSX.read(data);
+          const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+          const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+          questions = jsonData.map((row: any) => ({
+            question: row.Question || row.question || '',
+            questionImage: row.QuestionImage || row.questionImage || '',
+            options: [
+              row.Option1 || row.option1 || '',
+              row.Option2 || row.option2 || '',
+              row.Option3 || row.option3 || '',
+              row.Option4 || row.option4 || ''
+            ],
+            optionImages: [
+              row.OptionImage1 || row.optionImage1 || '',
+              row.OptionImage2 || row.optionImage2 || '',
+              row.OptionImage3 || row.optionImage3 || '',
+              row.OptionImage4 || row.optionImage4 || ''
+            ],
+            correct: parseInt(row.Correct || row.correct || '0') - 1,
+            explanation: row.Explanation || row.explanation || ''
+          }));
+        } else if (isWord) {
+          const mammoth = await import('mammoth');
+          const arrayBuffer = await file.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer });
+          const text = result.value;
+
+          const questionBlocks = text.split('\n\n').filter((block: string) => block.trim());
+          
+          questions = questionBlocks.map((block: string) => {
+            const lines = block.split('\n').map((l: string) => l.trim());
+            const question = lines.find((l: string) => l.startsWith('Q:'))?.substring(2).trim() || '';
+            const options = lines.filter((l: string) => /^[A-D]\)/.test(l)).map((l: string) => l.substring(2).trim());
+            const correctLine = lines.find((l: string) => l.startsWith('Correct:'))?.substring(8).trim() || 'A';
+            const correct = correctLine.charCodeAt(0) - 65;
+            const explanation = lines.find((l: string) => l.startsWith('Explanation:'))?.substring(12).trim() || '';
+
+            return {
+              question,
+              options: options.length === 4 ? options : ['', '', '', ''],
+              correct: Math.max(0, Math.min(3, correct)),
+              explanation
+            };
+          }).filter((q: { question: any; options: any[]; }) => q.question && q.options.every((o: any) => o));
+        }
+
+        if (questions.length === 0) {
+          alert('No valid questions found in the file. Please check the format.');
+          return;
+        }
+
+        setTestForm(prev => ({
+          ...prev,
+          questions: [...prev.questions, ...questions]
+        }));
+
+        alert(`Successfully imported ${questions.length} questions!`);
+      } catch (error: any) {
+        console.error(error);
+        alert('Failed to parse file: ' + error.message);
+      } finally {
+        setUploadingFile(false);
+        e.target.value = '';
+      }
+    };
+
+    const convertImageToBase64 = (file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    };
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'question' | 'option', optionIndex?: number) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      if (!file.type.startsWith('image/')) {
+        alert('Please upload an image file');
+        return;
+      }
+
+      try {
+        const base64 = await convertImageToBase64(file);
+        
+        if (type === 'question') {
+          setQuestionForm(prev => ({ ...prev, questionImage: base64 }));
+        } else if (type === 'option' && optionIndex !== undefined) {
+          setQuestionForm(prev => {
+            const newImages = [...prev.optionImages];
+            newImages[optionIndex] = base64;
+            return { ...prev, optionImages: newImages };
+          });
+        }
+      } catch (error) {
+        alert('Failed to upload image');
+      }
     };
 
     return (
@@ -981,6 +1151,32 @@ const QuizPlatform: React.FC = () => {
           {activeTab === 'create-test' && (
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-bold mb-6">Create New Test</h2>
+              
+              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <h3 className="font-bold mb-2 flex items-center gap-2">
+                  <Upload className="w-5 h-5" />
+                  Quick Import from File
+                </h3>
+                <p className="text-sm text-gray-600 mb-3">
+                  Upload Excel (.xlsx) or Word (.docx) file with questions.
+                  <br />
+                  <strong>Excel format:</strong> Columns - Question, Option1, Option2, Option3, Option4, Correct (1-4), Explanation, QuestionImage (URL), OptionImage1-4 (URLs)
+                  <br />
+                  <strong>Word format:</strong> Q: question text | A) option1 | B) option2 | C) option3 | D) option4 | Correct: A | Explanation: text (separate questions with blank line)
+                </p>
+                <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                  <Upload className="w-4 h-4" />
+                  {uploadingFile ? 'Uploading...' : 'Upload File'}
+                  <input 
+                    type="file" 
+                    accept=".xlsx,.xls,.docx,.doc" 
+                    onChange={handleFileUpload}
+                    disabled={uploadingFile}
+                    className="hidden" 
+                  />
+                </label>
+              </div>
+
               <div className="space-y-4 mb-6">
                 <input 
                   type="text" 
@@ -1019,36 +1215,99 @@ const QuizPlatform: React.FC = () => {
 
                 <div className="border-t pt-4">
                   <h3 className="font-bold mb-3">Add Question ({testForm.questions.length} added)</h3>
-                  <textarea 
-                    placeholder="Question" 
-                    value={questionForm.question} 
-                    onChange={e => setQuestionForm({...questionForm, question: e.target.value})} 
-                    className="w-full px-4 py-2 border rounded-lg mb-3" 
-                    rows={2} 
-                  />
+                  
+                  <div className="mb-3">
+                    <textarea 
+                      placeholder="Question" 
+                      value={questionForm.question} 
+                      onChange={e => setQuestionForm({...questionForm, question: e.target.value})} 
+                      className="w-full px-4 py-2 border rounded-lg mb-2" 
+                      rows={2} 
+                    />
+                    <div className="flex gap-2 items-center">
+                      <label className="cursor-pointer inline-flex items-center gap-2 px-3 py-1 bg-gray-100 rounded text-sm hover:bg-gray-200">
+                        <ImageIcon className="w-4 h-4" />
+                        Add Question Image
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          onChange={(e) => handleImageUpload(e, 'question')}
+                          className="hidden" 
+                        />
+                      </label>
+                      {questionForm.questionImage && (
+                        <div className="flex items-center gap-2">
+                          <img src={questionForm.questionImage} alt="Question" className="h-10 w-10 object-cover rounded" />
+                          <button 
+                            onClick={() => setQuestionForm({...questionForm, questionImage: ''})}
+                            className="text-red-600 text-sm hover:underline"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   
                   {questionForm.options.map((opt, idx) => (
-                    <div key={idx} className="flex gap-2 mb-2">
-                      <input 
-                        type="text" 
-                        placeholder={`Option ${idx + 1}`} 
-                        value={opt} 
-                        onChange={e => {
-                          const newOpts = [...questionForm.options];
-                          newOpts[idx] = e.target.value;
-                          setQuestionForm({...questionForm, options: newOpts});
-                        }} 
-                        className="flex-1 px-4 py-2 border rounded-lg" 
-                      />
-                      <button 
-                        type="button"
-                        onClick={() => setQuestionForm({...questionForm, correct: idx})} 
-                        className={`px-4 py-2 rounded-lg transition ${questionForm.correct === idx ? 'bg-green-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
-                      >
-                        {questionForm.correct === idx ? '✓ Correct' : 'Set Correct'}
-                      </button>
+                    <div key={idx} className="mb-3">
+                      <div className="flex gap-2 mb-1">
+                        <input 
+                          type="text" 
+                          placeholder={`Option ${idx + 1}`} 
+                          value={opt} 
+                          onChange={e => {
+                            const newOpts = [...questionForm.options];
+                            newOpts[idx] = e.target.value;
+                            setQuestionForm({...questionForm, options: newOpts});
+                          }} 
+                          className="flex-1 px-4 py-2 border rounded-lg" 
+                        />
+                        <button 
+                          type="button"
+                          onClick={() => setQuestionForm({...questionForm, correct: idx})} 
+                          className={`px-4 py-2 rounded-lg transition whitespace-nowrap ${questionForm.correct === idx ? 'bg-green-600 text-white' : 'bg-gray-200 hover:bg-gray-300'}`}
+                        >
+                          {questionForm.correct === idx ? '✓ Correct' : 'Set Correct'}
+                        </button>
+                      </div>
+                      <div className="flex gap-2 items-center ml-2">
+                        <label className="cursor-pointer inline-flex items-center gap-1 px-2 py-1 bg-gray-50 rounded text-xs hover:bg-gray-100">
+                          <ImageIcon className="w-3 h-3" />
+                          Add Image
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            onChange={(e) => handleImageUpload(e, 'option', idx)}
+                            className="hidden" 
+                          />
+                        </label>
+                        {questionForm.optionImages[idx] && (
+                          <div className="flex items-center gap-1">
+                            <img src={questionForm.optionImages[idx]} alt={`Option ${idx + 1}`} className="h-8 w-8 object-cover rounded" />
+                            <button 
+                              onClick={() => {
+                                const newImages = [...questionForm.optionImages];
+                                newImages[idx] = '';
+                                setQuestionForm({...questionForm, optionImages: newImages});
+                              }}
+                              className="text-red-600 text-xs hover:underline"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ))}
+                  
+                  <textarea 
+                    placeholder="Explanation for correct answer (optional)" 
+                    value={questionForm.explanation} 
+                    onChange={e => setQuestionForm({...questionForm, explanation: e.target.value})} 
+                    className="w-full px-4 py-2 border rounded-lg mb-2" 
+                    rows={2} 
+                  />
                   
                   <button 
                     type="button"
@@ -1062,21 +1321,27 @@ const QuizPlatform: React.FC = () => {
                 {testForm.questions.length > 0 && (
                   <div className="border-t pt-4">
                     <h3 className="font-bold mb-2">Questions Preview</h3>
-                    {testForm.questions.map((q, idx) => (
-                      <div key={idx} className="p-3 bg-gray-50 rounded mb-2 flex justify-between items-start">
-                        <div>
-                          <p className="font-medium">Q{idx + 1}: {q.question}</p>
-                          <p className="text-sm text-green-600">Correct: {q.options[q.correct]}</p>
+                    <div className="max-h-96 overflow-y-auto">
+                      {testForm.questions.map((q, idx) => (
+                        <div key={idx} className="p-3 bg-gray-50 rounded mb-2">
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <p className="font-medium">Q{idx + 1}: {q.question}</p>
+                              {q.questionImage && <img src={q.questionImage} alt="Question" className="h-20 mt-1 rounded" />}
+                              <p className="text-sm text-green-600 mt-1">Correct: {q.options[q.correct]}</p>
+                              {q.explanation && <p className="text-xs text-gray-600 mt-1">Explanation: {q.explanation}</p>}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeQuestion(idx)}
+                              className="text-red-600 hover:text-red-800 text-sm ml-2"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => removeQuestion(idx)}
-                          className="text-red-600 hover:text-red-800 text-sm"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -1141,19 +1406,26 @@ const QuizPlatform: React.FC = () => {
                 />
                 
                 <button 
+                  disabled={actionLoading === 'material'}
                   onClick={async () => { 
-                    if(materialForm.title && materialForm.content) { 
+                    if(materialForm.title && materialForm.content && materialForm.course && materialForm.subject) { 
                       try {
+                        setActionLoading('material');
                         await addMaterial(materialForm.title, materialForm.course, materialForm.subject, materialForm.content, materialForm.type); 
                         setMaterialForm({ title: '', course: '', subject: '', content: '', type: 'notes' });
+                        alert('Material uploaded successfully!');
                       } catch (error: any) {
                         alert(error.message || "Failed to upload material");
+                      } finally {
+                        setActionLoading(null);
                       }
-                    } 
+                    } else {
+                      alert('Please fill all fields');
+                    }
                   }} 
-                  className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-60"
                 >
-                  Upload Material
+                  {actionLoading === 'material' ? 'Uploading...' : 'Upload Material'}
                 </button>
               </div>
 
@@ -1167,6 +1439,7 @@ const QuizPlatform: React.FC = () => {
                       <div key={m.id} className="p-4 border rounded-lg">
                         <p className="font-medium">{m.title}</p>
                         <p className="text-sm text-gray-600">{m.subject} | {m.type}</p>
+                        <p className="text-xs text-gray-500 mt-1">Course: {courses.find(c => c.id === m.course)?.name || m.course}</p>
                       </div>
                     ))
                   )}
@@ -1277,15 +1550,19 @@ const QuizPlatform: React.FC = () => {
               ) : (
                 myAttempts.map(a => {
                   const test = tests.find(t => t.id === a.testId);
+                  if (!test) return null;
+                  
                   const percentage = ((a.score / a.total) * 100).toFixed(1);
+                  const order = a.shuffledOrder || [];
+                  
                   return (
                     <div key={a.id} className="bg-white rounded-lg shadow p-6">
-                      <div className="flex justify-between items-start">
+                      <div className="flex justify-between items-start mb-4">
                         <div>
-                          <h3 className="text-xl font-bold">{test?.title || 'Unknown Test'}</h3>
-                          <p className="text-gray-600">{test?.subject}</p>
+                          <h3 className="text-xl font-bold">{test.title}</h3>
+                          <p className="text-gray-600">{test.subject}</p>
                           <p className="text-sm text-gray-500 mt-1">
-                            {new Date(a.submittedAt).toLocaleString()}
+                            Submitted: {new Date(a.submittedAt).toLocaleString()}
                           </p>
                         </div>
                         <div className="text-right">
@@ -1296,6 +1573,47 @@ const QuizPlatform: React.FC = () => {
                           <p className="text-gray-600">{a.score}/{a.total} correct</p>
                         </div>
                       </div>
+
+                      <details className="mt-4">
+                        <summary className="cursor-pointer text-indigo-600 font-medium hover:underline">
+                          View Answers & Explanations
+                        </summary>
+                        <div className="mt-4 space-y-4 max-h-96 overflow-y-auto">
+                          {order.map((originalIdx, shuffledIdx) => {
+                            const q = test.questions[originalIdx];
+                            const userAnswer = a.answers[shuffledIdx];
+                            const isCorrect = userAnswer === q.correct;
+
+                            return (
+                              <div key={shuffledIdx} className={`p-4 rounded-lg border-2 ${isCorrect ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}`}>
+                                <p className="font-medium mb-2">Q{shuffledIdx + 1}. {q.question}</p>
+                                {q.questionImage && <img src={q.questionImage} alt="Question" className="h-32 mb-2 rounded" />}
+                                
+                                <div className="space-y-1 mb-2">
+                                  {q.options.map((opt, idx) => (
+                                    <div key={idx} className={`p-2 rounded ${
+                                      idx === q.correct ? 'bg-green-200 font-medium' : 
+                                      idx === userAnswer && idx !== q.correct ? 'bg-red-200' : 'bg-gray-100'
+                                    }`}>
+                                      {idx === userAnswer && '➤ '}
+                                      {opt}
+                                      {q.optionImages?.[idx] && <img src={q.optionImages[idx]} alt={`Option ${idx + 1}`} className="h-16 mt-1 rounded" />}
+                                      {idx === q.correct && ' ✓'}
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {q.explanation && (
+                                  <div className="mt-2 p-3 bg-blue-50 rounded border border-blue-200">
+                                    <p className="text-sm font-medium text-blue-900">Explanation:</p>
+                                    <p className="text-sm text-blue-800">{q.explanation}</p>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
                     </div>
                   );
                 })
@@ -1348,66 +1666,254 @@ const QuizPlatform: React.FC = () => {
 
     if (!currentTest) return null;
 
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <nav className="bg-white shadow-sm border-b sticky top-0 z-10">
-          <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
-            <div>
-              <h2 className="text-xl font-bold">{currentTest.title}</h2>
-              <p className="text-sm text-gray-600">{currentTest.subject}</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${timeLeft < 300 ? 'bg-red-100 text-red-800 animate-pulse' : 'bg-blue-100 text-blue-800'}`}>
-                <Clock className="w-5 h-5" />
-                <span className="font-bold font-mono">{formatTime(timeLeft)}</span>
-              </div>
-              <button 
-                onClick={submitTest} 
-                className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700"
-              >
-                Submit
-              </button>
-            </div>
-          </div>
-        </nav>
+    const currentOriginalIdx = shuffledOrder[currentQuestionIndex];
+    const currentQuestion = currentTest.questions[currentOriginalIdx];
+    
+    const answeredCount = Object.keys(answers).length;
+    const unansweredCount = currentTest.questions.length - answeredCount;
+    const reviewCount = markedForReview.size;
 
-        <div className="max-w-4xl mx-auto px-4 py-8">
-          <div className="space-y-6">
-            {currentTest.questions.map((q, idx) => (
-              <div key={idx} className="bg-white rounded-lg shadow p-6">
-                <p className="font-bold text-lg mb-4">Q{idx + 1}. {q.question}</p>
-                <div className="space-y-2">
-                  {q.options.map((opt, optIdx) => (
-                    <label 
-                      key={optIdx} 
-                      className={`flex items-center p-4 border-2 rounded-lg cursor-pointer transition ${
-                        answers[idx] === optIdx 
-                          ? 'border-indigo-600 bg-indigo-50' 
-                          : 'border-gray-200 hover:border-gray-300'
+    const getQuestionStatus = (idx: number): 'answered' | 'review' | 'unanswered' => {
+      if (markedForReview.has(idx)) return 'review';
+      if (answers[idx] !== undefined) return 'answered';
+      return 'unanswered';
+    };
+
+    const handleAnswer = (optionIdx: number) => {
+      setAnswers({ ...answers, [currentQuestionIndex]: optionIdx });
+    };
+
+    const handleMarkReview = () => {
+      const newReview = new Set(markedForReview);
+      if (newReview.has(currentQuestionIndex)) {
+        newReview.delete(currentQuestionIndex);
+      } else {
+        newReview.add(currentQuestionIndex);
+      }
+      setMarkedForReview(newReview);
+    };
+
+    const handleClearAnswer = () => {
+      const newAnswers = { ...answers };
+      delete newAnswers[currentQuestionIndex];
+      setAnswers(newAnswers);
+    };
+
+    const goToQuestion = (idx: number) => {
+      setCurrentQuestionIndex(idx);
+    };
+
+    const handleNext = () => {
+      if (currentQuestionIndex < currentTest.questions.length - 1) {
+        setCurrentQuestionIndex(currentQuestionIndex + 1);
+      }
+    };
+
+    const handlePrevious = () => {
+      if (currentQuestionIndex > 0) {
+        setCurrentQuestionIndex(currentQuestionIndex - 1);
+      }
+    };
+
+    const handleSubmitConfirm = () => {
+      if (unansweredCount > 0) {
+        const confirmMsg = `You have ${unansweredCount} unanswered question(s). Are you sure you want to submit?`;
+        if (!confirm(confirmMsg)) return;
+      }
+      submitTest();
+    };
+
+    return (
+      <div className="min-h-screen bg-gray-100 flex">
+        <div className="flex-1 flex flex-col">
+          <nav className="bg-white shadow-sm border-b">
+            <div className="px-4 py-3 flex justify-between items-center">
+              <div>
+                <h2 className="text-lg font-bold">{currentTest.title}</h2>
+                <p className="text-sm text-gray-600">{currentTest.subject}</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold ${timeLeft < 300 ? 'bg-red-100 text-red-800 animate-pulse' : 'bg-blue-100 text-blue-800'}`}>
+                  <Clock className="w-5 h-5" />
+                  <span className="font-mono text-lg">{formatTime(timeLeft)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-4 py-2 bg-gray-50 border-t flex justify-around text-sm">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-green-600" />
+                <span className="font-medium">{answeredCount} Answered</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Circle className="w-4 h-4 text-gray-400" />
+                <span className="font-medium">{unansweredCount} Not Answered</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-yellow-600" />
+                <span className="font-medium">{reviewCount} Marked for Review</span>
+              </div>
+            </div>
+          </nav>
+
+          <div className="flex-1 overflow-y-auto p-6">
+            <div className="max-w-4xl mx-auto">
+              <div className="bg-white rounded-lg shadow-lg p-8">
+                <div className="mb-6">
+                  <div className="flex justify-between items-start mb-4">
+                    <h3 className="text-lg font-bold text-gray-700">Question {currentQuestionIndex + 1} of {currentTest.questions.length}</h3>
+                    <button
+                      onClick={handleMarkReview}
+                      className={`flex items-center gap-1 px-3 py-1 rounded text-sm font-medium ${
+                        markedForReview.has(currentQuestionIndex)
+                          ? 'bg-yellow-100 text-yellow-800 border border-yellow-300'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                       }`}
                     >
-                      <input 
-                        type="radio" 
-                        name={`q${idx}`} 
-                        checked={answers[idx] === optIdx} 
-                        onChange={() => setAnswers({...answers, [idx]: optIdx})} 
-                        className="mr-3" 
+                      <AlertCircle className="w-4 h-4" />
+                      {markedForReview.has(currentQuestionIndex) ? 'Marked' : 'Mark for Review'}
+                    </button>
+                  </div>
+                  
+                  <div className="prose max-w-none">
+                    <p className="text-lg text-gray-900 leading-relaxed">{currentQuestion.question}</p>
+                    {currentQuestion.questionImage && (
+                      <img 
+                        src={currentQuestion.questionImage} 
+                        alt="Question" 
+                        className="mt-4 max-h-64 rounded-lg border shadow-sm"
                       />
-                      <span>{opt}</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {currentQuestion.options.map((option, idx) => (
+                    <label
+                      key={idx}
+                      className={`flex items-start p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                        answers[currentQuestionIndex] === idx
+                          ? 'border-indigo-600 bg-indigo-50 shadow-md'
+                          : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name={`question-${currentQuestionIndex}`}
+                        checked={answers[currentQuestionIndex] === idx}
+                        onChange={() => handleAnswer(idx)}
+                        className="mt-1 mr-4"
+                      />
+                      <div className="flex-1">
+                        <span className="font-medium text-gray-700 mr-2">({String.fromCharCode(65 + idx)})</span>
+                        <span className="text-gray-900">{option}</span>
+                        {currentQuestion.optionImages?.[idx] && (
+                          <img 
+                            src={currentQuestion.optionImages[idx]} 
+                            alt={`Option ${String.fromCharCode(65 + idx)}`} 
+                            className="mt-2 max-h-32 rounded border"
+                          />
+                        )}
+                      </div>
                     </label>
                   ))}
                 </div>
+
+                <div className="mt-8 flex justify-between items-center pt-6 border-t">
+                  <button
+                    onClick={handleClearAnswer}
+                    disabled={answers[currentQuestionIndex] === undefined}
+                    className="px-4 py-2 text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Clear Response
+                  </button>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handlePrevious}
+                      disabled={currentQuestionIndex === 0}
+                      className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Previous
+                    </button>
+
+                    {currentQuestionIndex < currentTest.questions.length - 1 ? (
+                      <button
+                        onClick={handleNext}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                      >
+                        Next
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={handleSubmitConfirm}
+                        className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium"
+                      >
+                        Submit Test
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
-            ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="w-80 bg-white border-l shadow-lg overflow-y-auto">
+          <div className="sticky top-0 bg-white border-b p-4 z-10">
+            <h3 className="font-bold text-gray-800 mb-3">Question Palette</h3>
+            
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-green-500 text-white rounded flex items-center justify-center font-bold">1</div>
+                <span>Answered</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-red-500 text-white rounded flex items-center justify-center font-bold">2</div>
+                <span>Not Answered</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-yellow-500 text-white rounded flex items-center justify-center font-bold">3</div>
+                <span>Marked for Review</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-indigo-500 text-white rounded flex items-center justify-center font-bold shadow-lg ring-2 ring-indigo-300">4</div>
+                <span>Current Question</span>
+              </div>
+            </div>
           </div>
 
-          <div className="mt-8 flex justify-between items-center bg-white rounded-lg shadow p-4">
-            <p className="text-gray-600">
-              Answered: <span className="font-bold">{Object.keys(answers).length}/{currentTest.questions.length}</span>
-            </p>
-            <button 
-              onClick={submitTest} 
-              className="px-8 py-3 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700"
+          <div className="p-4">
+            <div className="grid grid-cols-5 gap-2">
+              {shuffledOrder.map((_, idx) => {
+                const status = getQuestionStatus(idx);
+                const isCurrent = idx === currentQuestionIndex;
+                
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => goToQuestion(idx)}
+                    className={`w-10 h-10 rounded font-bold transition-all ${
+                      isCurrent
+                        ? 'bg-indigo-500 text-white shadow-lg ring-2 ring-indigo-300 scale-110'
+                        : status === 'answered'
+                        ? 'bg-green-500 text-white hover:bg-green-600'
+                        : status === 'review'
+                        ? 'bg-yellow-500 text-white hover:bg-yellow-600'
+                        : 'bg-red-500 text-white hover:bg-red-600'
+                    }`}
+                  >
+                    {idx + 1}
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={handleSubmitConfirm}
+              className="w-full mt-6 px-6 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-lg"
             >
               Submit Test
             </button>
