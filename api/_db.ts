@@ -87,11 +87,11 @@ const materialSchema = new mongoose.Schema({
 
 // ============== MODELS ==============
 
-export const User = mongoose.models.User || mongoose.model("User", userSchema);
-export const Course = mongoose.models.Course || mongoose.model("Course", courseSchema);
-export const Test = mongoose.models.Test || mongoose.model("Test", testSchema);
-export const Attempt = mongoose.models.Attempt || mongoose.model("Attempt", attemptSchema);
-export const Material = mongoose.models.Material || mongoose.model("Material", materialSchema);
+export const User = (mongoose.models.User || mongoose.model("User", userSchema)) as mongoose.Model<any>;
+export const Course = (mongoose.models.Course || mongoose.model("Course", courseSchema)) as mongoose.Model<any>;
+export const Test = (mongoose.models.Test || mongoose.model("Test", testSchema)) as mongoose.Model<any>;
+export const Attempt = (mongoose.models.Attempt || mongoose.model("Attempt", attemptSchema)) as mongoose.Model<any>;
+export const Material = (mongoose.models.Material || mongoose.model("Material", materialSchema)) as mongoose.Model<any>;
 
 // ============== AUTH HELPERS ==============
 

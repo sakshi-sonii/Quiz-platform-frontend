@@ -70,8 +70,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(401).json({ message: "Invalid email or password" });
         }
 
-        // Check if user is approved (teachers need approval, students and admins are auto-approved)
-        if (!user.approved && user.role === "teacher") {
+        // Require admin approval for all non-admin users
+        if (!user.approved && user.role !== "admin") {
           return res.status(403).json({ message: "Your account is pending approval" });
         }
 
@@ -119,14 +119,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           password: hashedPassword,
           name,
           role,
-          approved: role === "student", // Students are auto-approved, teachers need approval
+          approved: false,
           course: role === "student" ? course : undefined,
         });
 
-        const message =
-          role === "teacher"
-            ? "Registration successful! Please wait for admin approval."
-            : "Registration successful! You can now login.";
+        const message = "Registration successful! Please wait for admin approval.";
 
         return res.status(201).json({
           message,

@@ -533,6 +533,7 @@ const QuizPlatform: React.FC = () => {
     const [activeTab, setActiveTab] = useState("users");
     const [courseForm, setCourseForm] = useState({ name: "", description: "" });
     const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [newUserForm, setNewUserForm] = useState({ email: '', password: '', name: '', role: 'student' as 'student' | 'teacher' | 'admin', course: '', approved: false });
 
     const pendingUsers = users.filter(
       (u) => !u.approved && u.role === "teacher"
@@ -670,9 +671,49 @@ const QuizPlatform: React.FC = () => {
               </div>
 
               <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-xl font-bold mb-4">
-                  All Users ({users.length})
+                <h2 className="text-xl font-bold mb-4 flex items-center justify-between">
+                  <span>All Users ({users.length})</span>
                 </h2>
+
+                <div className="mb-4 p-4 border rounded-lg bg-gray-50">
+                  <h3 className="font-medium mb-2">Add User</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                    <input type="email" placeholder="Email" value={newUserForm.email} onChange={e => setNewUserForm({...newUserForm, email: e.target.value})} className="px-3 py-2 border rounded" />
+                    <input type="text" placeholder="Full name" value={newUserForm.name} onChange={e => setNewUserForm({...newUserForm, name: e.target.value})} className="px-3 py-2 border rounded" />
+                    <input type="password" placeholder="Password" value={newUserForm.password} onChange={e => setNewUserForm({...newUserForm, password: e.target.value})} className="px-3 py-2 border rounded" />
+                    <select value={newUserForm.role} onChange={e => setNewUserForm({...newUserForm, role: e.target.value as any})} className="px-3 py-2 border rounded">
+                      <option value="student">Student</option>
+                      <option value="teacher">Teacher</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <select value={newUserForm.course} onChange={e => setNewUserForm({...newUserForm, course: e.target.value})} className="px-3 py-2 border rounded">
+                      <option value="">Course (optional)</option>
+                      {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <label className="flex items-center gap-2">
+                      <input type="checkbox" checked={newUserForm.approved} onChange={e => setNewUserForm({...newUserForm, approved: e.target.checked})} />
+                      <span className="text-sm">Approved</span>
+                    </label>
+                  </div>
+                  <div className="mt-3">
+                    <button onClick={async () => {
+                      try {
+                        const payload: any = { email: newUserForm.email, password: newUserForm.password, name: newUserForm.name, role: newUserForm.role };
+                        if (newUserForm.course) payload.course = newUserForm.course;
+                        payload.approved = newUserForm.approved;
+                        setActionLoading('create-user');
+                        await api('users', 'POST', payload);
+                        const usersData = await api('users');
+                        setUsers(usersData);
+                        setNewUserForm({ email: '', password: '', name: '', role: 'student', course: '', approved: false });
+                        alert('User created');
+                      } catch (error: any) {
+                        alert(error.message || 'Failed to create user');
+                      } finally { setActionLoading(null); }
+                    }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">{actionLoading === 'create-user' ? '...' : 'Create User'}</button>
+                  </div>
+                </div>
+
                 <div className="space-y-2">
                   {users.map((u) => (
                     <div
@@ -685,15 +726,32 @@ const QuizPlatform: React.FC = () => {
                           {u.email} – {u.role}
                         </p>
                       </div>
-                      <span
-                        className={`px-3 py-1 rounded text-sm ${
-                          u.approved
-                            ? "bg-green-100 text-green-800"
-                            : "bg-yellow-100 text-yellow-800"
-                        }`}
-                      >
-                        {u.approved ? "Active" : "Pending"}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-3 py-1 rounded text-sm ${
+                            u.approved
+                              ? "bg-green-100 text-green-800"
+                              : "bg-yellow-100 text-yellow-800"
+                          }`}
+                        >
+                          {u.approved ? "Active" : "Pending"}
+                        </span>
+                        {!u.approved && u.role !== 'admin' && (
+                          <button disabled={actionLoading === u.id} onClick={() => approveTeacher(u.id)} className="px-3 py-1 bg-green-600 text-white rounded">Approve</button>
+                        )}
+                        <button disabled={actionLoading === u.id} onClick={async () => {
+                          if (!confirm('Delete user?')) return;
+                          setActionLoading(u.id);
+                          try {
+                            await api(`users/${u.id}`, 'DELETE');
+                            const usersData = await api('users');
+                            setUsers(usersData);
+                          } catch (error: any) {
+                            alert(error.message || 'Failed to delete user');
+                          }
+                          setActionLoading(null);
+                        }} className="px-3 py-1 bg-red-600 text-white rounded">Delete</button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1462,7 +1520,7 @@ const QuizPlatform: React.FC = () => {
   };
 
   const StudentView: React.FC = () => {
-    const [activeTab, setActiveTab] = useState(studentActiveTab);
+    const activeTab = studentActiveTab;
     
     const studentCourse = courses.find(c => c.id === user!.course);
     const availableTests = tests.filter(t => t.approved && t.active && t.course === user!.course);
@@ -1497,7 +1555,7 @@ const QuizPlatform: React.FC = () => {
             {['tests', 'results', 'materials'].map(tab => (
               <button 
                 key={tab} 
-                onClick={() => setActiveTab(tab)} 
+                onClick={() => setStudentActiveTab(tab)} 
                 className={`px-6 py-2 rounded-lg font-medium whitespace-nowrap transition ${activeTab === tab ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-100'}`}
               >
                 {tab.charAt(0).toUpperCase() + tab.slice(1)}
