@@ -107,6 +107,7 @@ const QuizPlatform: React.FC = () => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [loading, setLoading] = useState(false);
+  const [studentActiveTab, setStudentActiveTab] = useState<string>('tests');
 
   useEffect(() => {
     api("courses").then(setCourses).catch(console.error);
@@ -170,6 +171,7 @@ const QuizPlatform: React.FC = () => {
     try {
       await api("attempts", "POST", {
         testId: currentTest.id,
+        studentId: user.id,
         score,
         total: currentTest.questions.length,
         answers,
@@ -183,6 +185,7 @@ const QuizPlatform: React.FC = () => {
       setMarkedForReview(new Set());
       setShuffledOrder([]);
       setCurrentQuestionIndex(0);
+      setStudentActiveTab('results');
       setView("student");
       
       const attemptsData = await api("attempts");
@@ -215,8 +218,14 @@ const QuizPlatform: React.FC = () => {
     });
 
     if (res.token) {
-      localStorage.setItem("token", res.token);
       const userData = { ...res.user, id: res.user._id || res.user.id };
+      
+      // Check if user is approved (required for students and teachers)
+      if ((userData.role === 'student' || userData.role === 'teacher') && !userData.approved) {
+        throw new Error("Your account is pending admin approval. Please try again later.");
+      }
+      
+      localStorage.setItem("token", res.token);
       setUser(userData);
       setView(userData.role);
     } else {
@@ -1453,7 +1462,7 @@ const QuizPlatform: React.FC = () => {
   };
 
   const StudentView: React.FC = () => {
-    const [activeTab, setActiveTab] = useState('tests');
+    const [activeTab, setActiveTab] = useState(studentActiveTab);
     
     const studentCourse = courses.find(c => c.id === user!.course);
     const availableTests = tests.filter(t => t.approved && t.active && t.course === user!.course);
