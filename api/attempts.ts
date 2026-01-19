@@ -48,7 +48,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(403).json({ message: "Only students can submit attempts" });
       }
 
-      const { testId, score, total, answers } = req.body;
+      const { testId, score, total, answers, shuffledOrder } = req.body;
 
       if (!testId || score === undefined || !total || !answers) {
         return res.status(400).json({ message: "All fields are required" });
@@ -85,6 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         score,
         total,
         answers,
+        shuffledOrder,
       });
 
       return res.status(201).json(attempt);

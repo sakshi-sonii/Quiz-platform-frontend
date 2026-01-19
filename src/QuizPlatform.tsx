@@ -1524,7 +1524,11 @@ const QuizPlatform: React.FC = () => {
     
     const studentCourse = courses.find(c => c.id === user!.course);
     const availableTests = tests.filter(t => t.approved && t.active && t.course === user!.course);
-    const myAttempts = attempts.filter(a => a.studentId === user!.id);
+    const myAttempts = attempts.filter(a => {
+      const sid: any = (a as any).studentId;
+      const sidStr = typeof sid === 'string' ? sid : (sid?._id || sid?.id);
+      return String(sidStr) === String(user!.id);
+    });
     const availableMaterials = materials.filter(m => m.course === user!.course);
 
     return (
