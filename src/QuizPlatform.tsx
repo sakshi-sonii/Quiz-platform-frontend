@@ -1620,7 +1620,9 @@ const QuizPlatform: React.FC = () => {
                 </div>
               ) : (
                 myAttempts.map(a => {
-                  const test = tests.find(t => t.id === a.testId);
+                  const rawTestId: any = (a as any).testId;
+                  const testIdStr = typeof rawTestId === 'string' ? rawTestId : (rawTestId?._id || rawTestId?.id);
+                  const test = tests.find(t => t.id === testIdStr);
                   if (!test) return null;
                   
                   const percentage = ((a.score / a.total) * 100).toFixed(1);
