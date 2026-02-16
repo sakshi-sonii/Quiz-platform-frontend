@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Material, getUserFromRequest } from "./_db.js";
+import { connectDB, Material, getUserFromRequest, withRetry } from "./_db.js";
+import mongoose from "mongoose";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,29 +19,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    // GET /api/materials - Get materials
+    // ======================
+    // GET /api/materials
+    // ======================
     if (req.method === "GET") {
-      let query = {};
+      let query: any = {};
 
-      // Students can only see materials for their course
       if (currentUser.role === "student") {
-        query = { course: currentUser.course };
+        query.course = currentUser.course;
+      } else if (currentUser.role === "teacher") {
+        query.teacherId = new mongoose.Types.ObjectId(currentUser._id.toString());
       }
-      // Teachers can see their own materials
-      else if (currentUser.role === "teacher") {
-        query = { teacherId: currentUser._id };
-      }
-      // Admin can see all materials
+      // Admin sees all
 
-      const materials = await Material.find(query)
-        .populate("course", "name")
-        .populate("teacherId", "name")
-        .sort({ createdAt: -1 });
+      const materials = await withRetry(() =>
+        Material.find(query)
+          .populate("course", "name")
+          .sort({ createdAt: -1 })
+          .lean()
+      );
 
       return res.status(200).json(materials);
     }
 
-    // POST /api/materials - Create material (teachers only)
+    // ======================
+    // POST /api/materials
+    // ======================
     if (req.method === "POST") {
       if (currentUser.role !== "teacher") {
         return res.status(403).json({ message: "Only teachers can create materials" });
@@ -52,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const { title, course, subject, content, type } = req.body;
 
-      if (!title || !course || !subject || !content || !type) {
+      if (!title?.trim() || !course || !subject?.trim() || !content?.trim() || !type) {
         return res.status(400).json({ message: "All fields are required" });
       }
 
@@ -60,20 +64,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "Invalid material type" });
       }
 
-      const material = await Material.create({
-        title,
-        course,
-        subject,
-        content,
-        type,
-        teacherId: currentUser._id,
-      });
+      const material = await withRetry(() =>
+        Material.create({
+          title: title.trim(),
+          course,
+          subject: subject.trim(),
+          content,
+          type,
+          teacherId: new mongoose.Types.ObjectId(currentUser._id.toString()),
+        })
+      );
 
       return res.status(201).json(material);
     }
 
     return res.status(405).json({ message: "Method not allowed" });
   } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+    console.error("Materials API error:", error.message);
+    return res.status(500).json({ message: error.message || "Internal server error" });
   }
 }

@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Test, getUserFromRequest } from "../_db.js";
+import { connectDB, Test, getUserFromRequest, withRetry } from "../_db.js";
+
+const VALID_SUBJECTS = ["physics", "chemistry", "maths", "biology"];
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,88 +20,244 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    const { id } = req.query;
+    const id = req.query.id as string;
 
-    // GET /api/tests/:id - Get single test
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "Invalid test ID" });
+    }
+
+    // ======================
+    // GET
+    // ======================
     if (req.method === "GET") {
-      const test = await Test.findById(id);
+      res.setHeader("Cache-Control", "s-maxage=10, stale-while-revalidate=30");
 
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
-      }
+      let query: any = { _id: id };
 
-      // Check access
       if (currentUser.role === "student") {
-        if (!test.approved || !test.active || test.course.toString() !== currentUser.course?.toString()) {
-          return res.status(403).json({ message: "Access denied" });
-        }
+        query.approved = true;
+        query.active = true;
+        query.course = currentUser.course;
       } else if (currentUser.role === "teacher") {
-        if (test.teacherId.toString() !== currentUser._id.toString()) {
-          return res.status(403).json({ message: "Access denied" });
+        query.teacherId = currentUser._id;
+      }
+
+      const test = await withRetry(() =>
+        Test.findOne(query).lean()
+      );
+
+      if (!test) {
+        if (currentUser.role !== "admin") {
+          const exists = await Test.exists({ _id: id });
+          if (exists) {
+            return res.status(403).json({ message: "Access denied" });
+          }
         }
+        return res.status(404).json({ message: "Test not found" });
       }
 
       return res.status(200).json(test);
     }
 
-    // PATCH /api/tests/:id - Update test
+    // ======================
+    // PATCH
+    // ======================
     if (req.method === "PATCH") {
-      const test = await Test.findById(id);
-
-      if (!test) {
-        return res.status(404).json({ message: "Test not found" });
+      if (currentUser.role !== "teacher" && currentUser.role !== "admin") {
+        return res.status(403).json({ message: "Access denied" });
       }
 
-      const { active, title, subject, duration, questions } = req.body;
+      const {
+        active,
+        title,
+        sections,
+        sectionTimings,
+        showAnswerKey,
+        testType,
+        stream,
+        customDuration,
+        customSubjects,
+      } = req.body;
 
-      // Teachers can only update their own tests (active status)
+      const update: any = {};
+
       if (currentUser.role === "teacher") {
-        if (test.teacherId.toString() !== currentUser._id.toString()) {
+        const test = await withRetry(() =>
+          Test.findOne({ _id: id, teacherId: currentUser._id })
+            .select("approved teacherId testType")
+            .lean()
+        );
+
+        if (!test) {
+          const exists = await Test.exists({ _id: id });
+          if (!exists) return res.status(404).json({ message: "Test not found" });
           return res.status(403).json({ message: "Access denied" });
         }
 
-        // Teachers can only toggle active status if test is approved
+        // Teachers can always toggle these regardless of approval
         if (active !== undefined && test.approved) {
-          test.active = active;
+          update.active = !!active;
+        }
+
+        // Teachers can always toggle answer key visibility
+        if (showAnswerKey !== undefined) {
+          update.showAnswerKey = !!showAnswerKey;
+        }
+
+        // Teachers can update content only if NOT yet approved
+        if (!test.approved) {
+          if (title?.trim()) update.title = title.trim();
+
+          if (testType && ["mock", "custom"].includes(testType)) {
+            update.testType = testType;
+          }
+
+          if (stream && ["PCM", "PCB"].includes(stream)) {
+            update.stream = stream;
+          }
+
+          if (sections && Array.isArray(sections) && sections.length > 0) {
+            update.sections = buildProcessedSections(sections);
+          }
+
+          if (sectionTimings) {
+            update.sectionTimings = {
+              physicsChemistry: sectionTimings.physicsChemistry ?? 90,
+              mathsOrBiology: sectionTimings.mathsOrBiology ?? 90,
+            };
+          }
+
+          if (customDuration !== undefined) {
+            const dur = Number(customDuration);
+            if (dur >= 1 && dur <= 600) {
+              update.customDuration = dur;
+            }
+          }
+
+          if (customSubjects && Array.isArray(customSubjects)) {
+            update.customSubjects = customSubjects.filter(
+              (s: string) => VALID_SUBJECTS.includes(s)
+            );
+          }
+        }
+      } else {
+        // Admin can update everything
+        if (active !== undefined) update.active = !!active;
+
+        if (showAnswerKey !== undefined) {
+          update.showAnswerKey = !!showAnswerKey;
+        }
+
+        if (title?.trim()) update.title = title.trim();
+
+        if (testType && ["mock", "custom"].includes(testType)) {
+          update.testType = testType;
+        }
+
+        if (stream && ["PCM", "PCB"].includes(stream)) {
+          update.stream = stream;
+        }
+
+        if (sections && Array.isArray(sections) && sections.length > 0) {
+          update.sections = buildProcessedSections(sections);
+        }
+
+        if (sectionTimings) {
+          update.sectionTimings = {
+            physicsChemistry: sectionTimings.physicsChemistry ?? 90,
+            mathsOrBiology: sectionTimings.mathsOrBiology ?? 90,
+          };
+        }
+
+        if (customDuration !== undefined) {
+          const dur = Number(customDuration);
+          if (dur >= 1 && dur <= 600) {
+            update.customDuration = dur;
+          }
+        }
+
+        if (customSubjects && Array.isArray(customSubjects)) {
+          update.customSubjects = customSubjects.filter(
+            (s: string) => VALID_SUBJECTS.includes(s)
+          );
         }
       }
-      // Admin can update any test
-      else if (currentUser.role === "admin") {
-        if (active !== undefined) test.active = active;
-        if (title) test.title = title;
-        if (subject) test.subject = subject;
-        if (duration) test.duration = duration;
-        if (questions) test.questions = questions;
-      } else {
-        return res.status(403).json({ message: "Access denied" });
+
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
       }
 
-      await test.save();
-      return res.status(200).json(test);
-    }
+      const updated = await withRetry(() =>
+        Test.findByIdAndUpdate(id, update, { new: true }).lean()
+      );
 
-    // DELETE /api/tests/:id - Delete test
-    if (req.method === "DELETE") {
-      const test = await Test.findById(id);
-
-      if (!test) {
+      if (!updated) {
         return res.status(404).json({ message: "Test not found" });
       }
 
-      // Only admin or the teacher who created it can delete
-      if (
-        currentUser.role !== "admin" &&
-        test.teacherId.toString() !== currentUser._id.toString()
-      ) {
+      return res.status(200).json(updated);
+    }
+
+    // ======================
+    // DELETE
+    // ======================
+    if (req.method === "DELETE") {
+      const query: any = { _id: id };
+
+      if (currentUser.role !== "admin") {
+        query.teacherId = currentUser._id;
+      }
+
+      const deleted = await withRetry(() =>
+        Test.findOneAndDelete(query).select("_id title").lean()
+      );
+
+      if (!deleted) {
+        const exists = await Test.exists({ _id: id });
+        if (!exists) return res.status(404).json({ message: "Test not found" });
         return res.status(403).json({ message: "Access denied" });
       }
 
-      await Test.findByIdAndDelete(id);
       return res.status(200).json({ message: "Test deleted successfully" });
     }
 
     return res.status(405).json({ message: "Method not allowed" });
   } catch (error: any) {
-    return res.status(500).json({ message: error.message });
+    console.error("Test [id] API error:", error.message);
+    return res.status(500).json({ message: error.message || "Internal server error" });
   }
+}
+
+// ========================
+// Helper: Process sections for storage
+// ========================
+function buildProcessedSections(sections: any[]): any[] {
+  return sections
+    .filter((section: any) => {
+      const subject = section.subject?.toLowerCase();
+      return (
+        subject &&
+        VALID_SUBJECTS.includes(subject) &&
+        section.questions?.length > 0
+      );
+    })
+    .map((section: any) => {
+      const subject = section.subject.toLowerCase();
+      return {
+        subject,
+        marksPerQuestion:
+          section.marksPerQuestion || (subject === "maths" ? 2 : 1),
+        questions: section.questions.map((q: any) => ({
+          question: q.question || "",
+          questionImage: q.questionImage || "",
+          options: q.options || [],
+          optionImages: q.optionImages?.some((img: string) => img)
+            ? q.optionImages
+            : [],
+          correct: q.correct,
+          explanation: q.explanation || "",
+          explanationImage: q.explanationImage || "",
+        })),
+      };
+    });
 }

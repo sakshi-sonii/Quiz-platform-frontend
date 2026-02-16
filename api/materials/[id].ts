@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { connectDB, Material, getUserFromRequest } from "../_db.js";
+import { connectDB, Material, getUserFromRequest, withRetry } from "../_db.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -18,13 +18,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ message: "Not authenticated" });
     }
 
-    const { id } = req.query;
+    const id = req.query.id as string;
 
-    // GET /api/materials/:id
+    if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ message: "Invalid material ID" });
+    }
+
+    // ======================
+    // GET
+    // ======================
     if (req.method === "GET") {
-      const material = await Material.findById(id)
-        .populate("course", "name")
-        .populate("teacherId", "name");
+      res.setHeader("Cache-Control", "s-maxage=10, stale-while-revalidate=30");
+
+      const material = await withRetry(() =>
+        Material.findById(id)
+          .populate("course", "name")
+          .populate("teacherId", "name")
+          .lean()
+      );
 
       if (!material) {
         return res.status(404).json({ message: "Material not found" });
@@ -33,50 +44,70 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(material);
     }
 
-    // PATCH /api/materials/:id
+    // ======================
+    // PATCH
+    // ======================
     if (req.method === "PATCH") {
-      const material = await Material.findById(id);
-
-      if (!material) {
-        return res.status(404).json({ message: "Material not found" });
-      }
-
-      // Only the teacher who created it or admin can update
-      if (
-        currentUser.role !== "admin" &&
-        material.teacherId.toString() !== currentUser._id.toString()
-      ) {
-        return res.status(403).json({ message: "Access denied" });
-      }
-
       const { title, subject, content, type } = req.body;
 
-      if (title) material.title = title;
-      if (subject) material.subject = subject;
-      if (content) material.content = content;
-      if (type && ["notes", "video", "pdf"].includes(type)) material.type = type;
+      // Build update object — only include fields that are provided
+      const update: any = {};
+      if (title) update.title = title;
+      if (subject) update.subject = subject;
+      if (content) update.content = content;
+      if (type && ["notes", "video", "pdf"].includes(type)) update.type = type;
 
-      await material.save();
-      return res.status(200).json(material);
-    }
-
-    // DELETE /api/materials/:id
-    if (req.method === "DELETE") {
-      const material = await Material.findById(id);
-
-      if (!material) {
-        return res.status(404).json({ message: "Material not found" });
+      if (Object.keys(update).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
       }
 
-      // Only the teacher who created it or admin can delete
-      if (
-        currentUser.role !== "admin" &&
-        material.teacherId.toString() !== currentUser._id.toString()
-      ) {
+      // Single atomic operation: find + check ownership + update
+      const query: any = { _id: id };
+
+      // Non-admin can only update their own materials
+      if (currentUser.role !== "admin") {
+        query.teacherId = currentUser._id;
+      }
+
+      const material = await withRetry(() =>
+        Material.findOneAndUpdate(query, update, { new: true }).lean()
+      );
+
+      if (!material) {
+        // Could be not found OR not authorized — check which
+        const exists = await Material.exists({ _id: id });
+        if (!exists) {
+          return res.status(404).json({ message: "Material not found" });
+        }
         return res.status(403).json({ message: "Access denied" });
       }
 
-      await Material.findByIdAndDelete(id);
+      return res.status(200).json(material);
+    }
+
+    // ======================
+    // DELETE
+    // ======================
+    if (req.method === "DELETE") {
+      // Single atomic operation: find + check ownership + delete
+      const query: any = { _id: id };
+
+      if (currentUser.role !== "admin") {
+        query.teacherId = currentUser._id;
+      }
+
+      const material = await withRetry(() =>
+        Material.findOneAndDelete(query).lean()
+      );
+
+      if (!material) {
+        const exists = await Material.exists({ _id: id });
+        if (!exists) {
+          return res.status(404).json({ message: "Material not found" });
+        }
+        return res.status(403).json({ message: "Access denied" });
+      }
+
       return res.status(200).json({ message: "Material deleted successfully" });
     }
 

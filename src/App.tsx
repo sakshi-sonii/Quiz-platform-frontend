@@ -1,7 +1,9 @@
 import QuizPlatform from './QuizPlatform'
 
 function App() {
-  return <QuizPlatform />
+  return (
+    <QuizPlatform />
+  )
 }
 
 export default App
